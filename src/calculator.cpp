@@ -3,16 +3,17 @@
 using namespace std;
 
 namespace Prime {
-    Calculator::Calculator(string fileName, string limit) {
+    Calculator::Calculator(string filePath, string limit) {
         this->limit = strtoul(limit.c_str(), nullptr, 0);
-        this->file.open(fileName);
+        this->filePath = filePath;
+        this->file.open(filePath);
 
         if(!this->file.is_open()) {
-            this->createFile(fileName);
-            this->file.open(fileName);
+            this->createFile(filePath);
+            this->file.open(filePath);
 
             if(!this->file.is_open()) {
-                cout << "unable to create file " << fileName << endl;
+                cout << "unable to create file " << filePath << endl;
                 exit(1);
             }
         }
@@ -31,15 +32,17 @@ namespace Prime {
         out.close();
     }
 
-    unsigned long Calculator::getLastPrime() {
+    long unsigned int Calculator::getLastPrime() {
         return strtoul(this->getLastLine().c_str(), nullptr, 0);
     }
 
     string Calculator::getLastLine() {
         ifstream::pos_type position = this->file.tellg(), lastPosition;
+        this->total = 0;
 
-        while(file >> ws && this->ignoreLine(lastPosition)) {
+        while(this->file >> ws && this->ignoreLine(lastPosition)) {
             position = lastPosition;
+            this->total++;
         }
 
         this->file.clear();
@@ -55,9 +58,13 @@ namespace Prime {
         return this->file.ignore(numeric_limits<streamsize>::max(), '\n');
     }
 
-    void Calculator::rewind() {
-        this->file.clear();
-        this->file.seekg(0, ios::beg);
+    void Calculator::rewindToLine(ifstream& f, unsigned long line) {
+        f.clear();
+        f.seekg(ios::beg);
+
+        for(int i = 0; i < line - 1; i++) {
+            f.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+        }
     }
 
     void Calculator::getNextCandidate() {
@@ -66,37 +73,52 @@ namespace Prime {
     }
 
     void Calculator::start() {
-        this->displayLastPrime();
-        cout << "limit is " << this->limit << endl;
+        this->multiThreads = (this->total >= THREADS);
+        cout << this->total << " prime numbers saved" << endl;
+        this->displayLargest();
 
-        unsigned long prime;
-        bool validCandidate;
+        if(this->multiThreads) {
+            cout << THREADS << " threads, limit is " << this->limit << endl;
+        } else {
+            cout << "1 thread, limit is " << THREADS << endl;
+        }
 
-        while(this->candidate <= this->limit) {
-            this->progression = (unsigned int) (this->candidate * 100 / this->limit);
+        this->run();
+        this->displayLargest();
+    }
 
-            if(this->progression != this->lastDisplayedProgression) {
-                this->lastDisplayedProgression = this->progression;
-                cout << this->progression << "% (" << this->lastFoundPrime << ")" << endl;
-            }
+    void Calculator::displayLargest() {
+        cout << "largest saved prime number is " << this->lastFoundPrime << endl;
+    }
 
-            this->candidate += 2;
-            validCandidate = true;
-            this->rewind();
+    void Calculator::run() {
+        while(this->multiThreads && this->candidate <= this->limit || !this->multiThreads && this->total < THREADS) {
+            if(this->multiThreads) {
+                this->progression = this->candidate * 100 / this->limit;
 
-            while(this->file >> prime) {
-                if(this->candidate % prime == 0) {
-                    validCandidate = false;
-                    break;
+                if(this->progression != this->lastDisplayedProgression) {
+                    this->lastDisplayedProgression = this->progression;
+                    cout << this->progression << "% (" << this->lastFoundPrime << "), " << this->range << " prime numbers per thread" << endl;
                 }
             }
 
-            if(validCandidate) {
+            this->candidate += 2;
+            this->validCandidate = true;
+
+            if(this->multiThreads) {
+                this->threads();
+            } else {
+                this->process(0, 0, this->total);
+            }
+
+            if(this->validCandidate) {
                 this->saveCandidate();
             }
         }
 
-        this->displayLastPrime();
+        if(!this->multiThreads && this->total == THREADS) {
+            this->start();
+        }
     }
 
     void Calculator::saveCandidate() {
@@ -104,9 +126,56 @@ namespace Prime {
         this->file.seekp(0, ios::end);
         this->file << endl << this->candidate;
         this->lastFoundPrime = this->candidate;
+        this->total++;
     }
 
-    void Calculator::displayLastPrime() {
-        cout << "largest saved prime number is " << this->lastFoundPrime << endl;
+    void Calculator::threads() {
+        thread threads[THREADS];
+        double from, to;
+        this->range = ceil(this->total / THREADS);
+
+        for(unsigned int i = 0; i < THREADS; i++) {
+            from = i * this->range;
+            to = from + this->range - 1;
+
+            if(i == THREADS - 1 && to != this->total) {
+                to = this->total;
+            }
+
+            threads[i] = thread(&Calculator::process, this, i, from, to);
+        }
+
+        for(int i = 0; i < THREADS; i++) {
+            threads[i].join();
+        }
+    }
+
+    void Calculator::process(unsigned int id, long unsigned int from, long unsigned int to) {
+        long unsigned int prime, line = from + 1;
+        ifstream in(this->filePath);
+        this->rewindToLine(in, line);
+
+        while(in >> prime) {
+            if(!this->validCandidate) {
+                break;
+            }
+
+            if(this->candidate % prime == 0) {
+                this->validCandidate = false;
+                break;
+            }
+
+            if(line - 1 == to) {
+                break;
+            }
+
+            line++;
+        }
+    }
+
+    void Calculator::log(string message) {
+        this->mtx.lock();
+        cout << message;
+        this->mtx.unlock();
     }
 }
